@@ -1,0 +1,129 @@
+name: CI/CD Pipeline - Banking Fraud & Risk Intelligence Platform
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  # =========================================================================
+  # Job 1: Test & Build Python ML Microservice
+  # =========================================================================
+  test-ml-service:
+    name: Python ML Service (PyTest & Lint)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Source Code
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install ML Dependencies
+        working-directory: ml-service
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pytest pytest-cov flake8
+
+      - name: Generate Synthetic Dataset & Train Baseline Model
+        working-directory: ml-service
+        run: |
+          python data/generate_dataset.py --samples 5000 --output data/synthetic_transactions.csv
+          python models/train.py --data data/synthetic_transactions.csv --output models/
+
+      - name: Run PyTest Test Suite with Coverage
+        working-directory: ml-service
+        run: |
+          pytest tests/ -v --cov=app --cov-report=xml
+
+  # =========================================================================
+  # Job 2: Test & Build Java / Spring Boot Microservice
+  # =========================================================================
+  test-java-backend:
+    name: Spring Boot 3 Backend (JUnit 5 & Maven)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Source Code
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          java-version: '21'
+          distribution: 'temurin'
+          cache: 'maven'
+
+      - name: Build & Run JUnit 5 Tests with Maven
+        working-directory: backend
+        run: |
+          mvn clean test -B
+
+      - name: Package JAR Artifact
+        working-directory: backend
+        run: |
+          mvn package -DskipTests -B
+
+  # =========================================================================
+  # Job 3: Build & Lint React Frontend Dashboard
+  # =========================================================================
+  test-frontend:
+    name: React Frontend (Build & Lint)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Source Code
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: frontend/package.json
+
+      - name: Install Frontend Dependencies
+        working-directory: frontend
+        run: npm ci
+
+      - name: Build Production Frontend Assets
+        working-directory: frontend
+        run: npm run build
+
+  # =========================================================================
+  # Job 4: Build Container Images (Docker verification)
+  # =========================================================================
+  build-docker-images:
+    name: Docker Image Build Validation
+    needs: [test-ml-service, test-java-backend, test-frontend]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Source Code
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build ML Service Image
+        uses: docker/build-push-action@v5
+        with:
+          context: ./ml-service
+          push: false
+          tags: fraud-ml-service:latest
+
+      - name: Build Spring Boot Backend Image
+        uses: docker/build-push-action@v5
+        with:
+          context: ./backend
+          push: false
+          tags: fraud-backend:latest
+
+      - name: Build React Frontend Image
+        uses: docker/build-push-action@v5
+        with:
+          context: ./frontend
+          push: false
+          tags: fraud-frontend:latest
